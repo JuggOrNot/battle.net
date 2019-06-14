@@ -21,10 +21,10 @@ elif SYSTEM == Platform.MACOS:
     AGENT_PATH = '/Users/Shared/Battle.net/Agent'
     CONFIG_PATH = os.path.expanduser('~/Library/Application Support/Battle.net/Battle.net.config')
 
-CLIENT_ID = "a1b2c3"
-CLIENT_SECRET = "d4e5"
+CLIENT_ID = "6cb41a854631426c8a74d4084c4d61f2"
+CLIENT_SECRET = "FFwxmMBGtEqPydyi9FMhj1zIvlJrBTE1"
 
 LOCALE = "en_US"
-REDIRECT_URI = "http://example.com"
+REDIRECT_URI = "http://friendsofgalaxy.com"
 
 FIREFOX_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:67.0) Gecko/20100101 Firefox/67.0"
