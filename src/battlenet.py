@@ -5,6 +5,7 @@ from bnet import connection_service_pb2, rpc_pb2, friends_service_pb2, authentic
 import struct
 import functools
 import logging as log
+from requests import utils
 
 
 class BNetClient:
@@ -198,7 +199,7 @@ class BNetClient:
         request.public_computer = False
         request.disconnect_on_cookie_fail = False
         request.allow_logon_queue_notifications = True
-        request.cached_web_credentials = str.encode(self._authentication_client.auth_data.ba_tassadar)
+        request.cached_web_credentials = str.encode(utils.dict_from_cookiejar(self._authentication_client.auth_data.cookie_jar)["BA-tassadar"])
         self._send_request(self._AUTHENTICATION_SERVICE, 1, request)
 
     def _on_connect_response(self, header, body):

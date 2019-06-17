@@ -23,7 +23,6 @@ class DataclassJSONEncoder(json.JSONEncoder):
 class WebsiteAuthData(object):
     cookie_jar: requests.cookies.RequestsCookieJar()
     access_token: str
-    ba_tassadar: str
     region: str
 
 

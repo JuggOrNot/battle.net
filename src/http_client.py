@@ -52,9 +52,9 @@ class AuthenticatedHttpClient(object):
         auth_data = WebsiteAuthData(
             cookie_jar=pickle.loads(bytes.fromhex(stored_credentials['cookie_jar'])),
             access_token=stored_credentials['access_token'],
-            region=stored_credentials['region'] if 'region' in stored_credentials else 'eu',
-            ba_tassadar=stored_credentials['BA-tassadar']
+            region=stored_credentials['region'] if 'region' in stored_credentials else 'eu'
         )
+
         # set default user_details data from cache
         if 'user_details_cache' in stored_credentials:
             self.user_details = stored_credentials['user_details_cache']
@@ -78,7 +78,7 @@ class AuthenticatedHttpClient(object):
         response.raise_for_status()
         result = response.json()
         access_token = result["access_token"]
-        self.auth_data = WebsiteAuthData(cookie_jar=cookie_jar, access_token=access_token, region=self.region, ba_tassadar=cookie_jar['BA-tassadar'])
+        self.auth_data = WebsiteAuthData(cookie_jar=cookie_jar, access_token=access_token, region=self.region)
         return self.auth_data
 
     # NOTE: use user data to present usertag/name to Galaxy, if this token expires and plugin cannot refresh it
@@ -130,13 +130,13 @@ class AuthenticatedHttpClient(object):
 
     def set_credentials(self):
         self.creds = {"cookie_jar": pickle.dumps(self.auth_data.cookie_jar).hex(), "access_token": self.auth_data.access_token,
-                      "user_details_cache": self.user_details, "region": self.auth_data.region, "BA-tassadar": self.auth_data.ba_tassadar}
+                      "user_details_cache": self.user_details, "region": self.auth_data.region}
 
     def parse_battletag(self):
         try:
             battletag = self.user_details["battletag"]
         except KeyError:
-            _URI = f'https://{self.region}.battle.net/login/en/flow/app.app?step=login&ST={self.auth_data.cookie_jar["BA-tassadar"]}&app=app&cr=true'
+            _URI = f'https://{self.region}.battle.net/login/en/flow/app.app?step=login&ST={requests.utils.dict_from_cookiejar(self.auth_data.cookie_jar)["BA-tassadar"]}&app=app&cr=true'
             auth_params = {
                 "window_title": "Login to Battle.net",
                 "window_width": 540,
@@ -165,7 +165,6 @@ class AuthenticatedHttpClient(object):
             "cookie_jar": pickle.dumps(self.session.cookie_jar).hex(),
             "access_token": self.auth_data.access_token,
             "region": self.auth_data.region,
-            "user_details_cache": self.user_details,
-            "BA-tassadar": self.auth_data.ba_tassadar
+            "user_details_cache": self.user_details
         }
         self._plugin.store_credentials(creds)
