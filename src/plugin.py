@@ -12,10 +12,8 @@ import logging as log
 from version import __version__ as version
 
 from galaxy.api.consts import LocalGameState, Platform
-from galaxy.api.errors import AuthenticationRequired, InvalidCredentials, BackendError
 from galaxy.api.plugin import Plugin, create_and_run_plugin
-from galaxy.api.types import Achievement, Game, LicenseInfo, LocalGame
-from galaxy.api.jsonrpc import Aborted
+from galaxy.api.types import Achievement, Game, LicenseInfo, LocalGame, FriendInfo
 
 from process import ProcessProvider
 from local_client import LocalClient, Uninstaller, ClientNotInstalledError
@@ -27,6 +25,10 @@ from watcher import FileWatcher
 from consts import CONFIG_PATH, AGENT_PATH, SYSTEM
 from consts import Platform as pf
 from http_client import AuthenticatedHttpClient
+from social import SocialFeatures
+from galaxy.api.errors import ( AuthenticationRequired,
+    BackendTimeout, BackendNotAvailable, BackendError, NetworkError, UnknownError, InvalidCredentials
+)
 
 
 def load_product_db(product_db_path):
@@ -54,6 +56,7 @@ class BNetPlugin(Plugin):
         self.local_client = LocalClient()
         self.authentication_client = AuthenticatedHttpClient(self)
         self.backend_client = BackendClient(self, self.authentication_client)
+        self.social_features = SocialFeatures(self.authentication_client)
         self.error_state = False
 
         self.running_task = None
@@ -71,13 +74,11 @@ class BNetPlugin(Plugin):
         loop.create_task(self._register_local_data_watcher())
 
     async def _register_local_data_watcher(self):
-        log.info('Registering local data watcher')
         any_change_event = asyncio.Event()
         FileWatcher(self.CONFIG_PATH, any_change_event, interval=1)
         FileWatcher(self.PRODUCT_DB_PATH, any_change_event, interval=2.5)
         while True:
             await any_change_event.wait()
-            log.debug('Change in local data detected. Refreshing')
             refreshed_games = self._parse_local_data()
             if not self.notifications_enabled:
                 self._update_statuses(refreshed_games, self.installed_games)
@@ -161,12 +162,9 @@ class BNetPlugin(Plugin):
             return {}
 
         try:
-            if self.uninstaller is None:
-                if SYSTEM == pf.WINDOWS:
-                    uninstaller_path = pathlib.Path(AGENT_PATH) / 'Blizzard Uninstaller.exe'
-                    self.uninstaller = Uninstaller(uninstaller_path)
-                elif SYSTEM == pf.MACOS:
-                    self.uninstaller = Uninstaller()
+            if SYSTEM == pf.WINDOWS and self.uninstaller is None:
+                uninstaller_path = pathlib.Path(AGENT_PATH) / 'Blizzard Uninstaller.exe'
+                self.uninstaller = Uninstaller(uninstaller_path)
         except FileNotFoundError as e:
             log.warning('uninstaller not found' + str(e))
 
@@ -228,28 +226,28 @@ class BNetPlugin(Plugin):
     async def uninstall_game(self, game_id):
         if not self.authentication_client.is_authenticated():
             raise AuthenticationRequired()
-        if self.uninstaller is None:
-            raise FileNotFoundError('Uninstaller not found')
-        try:
-            installed_game = self.installed_games.get(game_id, None)
-            if installed_game is None or not os.access(installed_game.install_path, os.F_OK):
-                log.error(f'Cannot uninstall {Blizzard[game_id].uid}')
-                self.update_local_game_status(LocalGame(game_id, LocalGameState.None_))
-                return
+        if SYSTEM == pf.MACOS:
+            try:
+                self.local_client.refresh()
+                self.local_client.open_battlenet(game_id)
+            except Exception as e:
+                log.exception(f"Opening battlenet client failed {e}")
+        else:
+            if self.uninstaller is None:
+                raise FileNotFoundError('Uninstaller not found')
+            try:
+                installed_game = self.installed_games.get(game_id, None)
+                if installed_game is None or not os.access(installed_game.install_path, os.F_OK):
+                    log.error(f'Cannot uninstall {Blizzard[game_id].uid}')
+                    self.update_local_game_status(LocalGame(game_id, LocalGameState.None_))
+                    return
 
-            uninstall_tag = installed_game.uninstall_tag
-            client_lang = self.config_parser.locale_language
-            self.uninstaller.uninstall_game(installed_game, uninstall_tag, client_lang)
-            if SYSTEM == pf.WINDOWS:
-                # we're watching config for updates
-                pass
-            elif SYSTEM == pf.MACOS:
-                # config info isn't updated but we are sure that we manually cleaned up the game
-                game_state = LocalGameState.None_
-                self.update_local_game_status(LocalGame(game_id, game_state))
+                uninstall_tag = installed_game.uninstall_tag
+                client_lang = self.config_parser.locale_language
+                self.uninstaller.uninstall_game(installed_game, uninstall_tag, client_lang)
 
-        except Exception as e:
-            log.exception(f'Uninstalling game {game_id} failed: {e}')
+            except Exception as e:
+                log.exception(f'Uninstalling game {game_id} failed: {e}')
 
     async def launch_game(self, game_id):
         if not self.authentication_client.is_authenticated():
@@ -281,33 +279,26 @@ class BNetPlugin(Plugin):
             log.exception(f"Launching game {game_id} failed: {e}")
 
     async def authenticate(self, stored_credentials=None):
-        log.info(f"stored_credentials {json.dumps(stored_credentials, indent=4)}")
         try:
             if stored_credentials:
-                log.info(f"Authenticate: got stored_credentials {json.dumps(stored_credentials, indent=4)}")
                 auth_data = self.authentication_client.process_stored_credentials(stored_credentials)
                 try:
                     await self.authentication_client.create_session()
                     await self.backend_client.refresh_cookies()
                     auth_status = await self.backend_client.validate_access_token(auth_data.access_token)
-                except Exception as e:
-                    log.exception(f"err: {str(e)}")
-                    raise Aborted()
+                except (BackendNotAvailable, BackendError, NetworkError, UnknownError, BackendTimeout) as e:
+                    raise e
+                except Exception:
+                    raise InvalidCredentials()
                 if self.authentication_client.validate_auth_status(auth_status):
                     self.authentication_client.user_details = await self.backend_client.get_user_info()
                 return self.authentication_client.parse_user_details()
             else:
-                log.info(f"Authenticate: running CEF Authenticator")
                 return self.authentication_client.authenticate_using_login()
-        except Aborted:
-            raise
         except Exception as e:
-            log.exception(f"EX: {str(e)}")
-            raise InvalidCredentials()
+            raise e
 
     async def pass_login_credentials(self, step, credentials, cookies):
-        log.info(f"end uri, {credentials['end_uri']}")
-
         if "logout&app=oauth" in credentials['end_uri']:
             # 2fa expired, repeat authentication
             return self.authentication_client.authenticate_using_login()
@@ -322,19 +313,27 @@ class BNetPlugin(Plugin):
         try:
             await self.authentication_client.create_session()
             await self.backend_client.refresh_cookies()
-        except Exception as e:
-            log.exception(f"err: {str(e)}")
-            raise Aborted()
+        except (BackendNotAvailable, BackendError, NetworkError, UnknownError, BackendTimeout) as e:
+            raise e
+        except Exception:
+            raise InvalidCredentials()
 
         auth_status = await self.backend_client.validate_access_token(auth_data.access_token)
         if not ("authorities" in auth_status and "IS_AUTHENTICATED_FULLY" in auth_status["authorities"]):
-            raise Aborted()
+            raise InvalidCredentials()
 
         self.authentication_client.user_details = await self.backend_client.get_user_info()
 
         self.authentication_client.set_credentials()
 
         return self.authentication_client.parse_battletag()
+
+    async def get_friends(self):
+        if not self.authentication_client.is_authenticated():
+            raise AuthenticationRequired()
+        friends_list = await self.social_features.get_friends()
+        return [FriendInfo(user_id=friend.id.low, user_name='') for friend in friends_list]
+
 
     async def get_owned_games(self):
         if not self.authentication_client.is_authenticated():
@@ -344,7 +343,6 @@ class BNetPlugin(Plugin):
             if not self.owned_games_cache:
                 games = await self.backend_client.get_owned_games()
                 self.owned_games_cache = games["gameAccounts"]
-            log.info(json.dumps(self.owned_games_cache, indent=4))
             return [
                 Game(
                     str(game["titleId"]),
@@ -484,6 +482,7 @@ class BNetPlugin(Plugin):
 
     def shutdown(self):
         log.info("Plugin shutdown.")
+        asyncio.create_task(self.authentication_client.shutdown())
 
 
 def main():

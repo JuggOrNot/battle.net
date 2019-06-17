@@ -1,15 +1,18 @@
 import asyncio
 import requests
 import functools
-import logging as log
+import logging
+
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 from http import HTTPStatus
 
-from galaxy.api.errors import BackendTimeout, BackendError, AccessDenied, \
-    AuthenticationRequired, BackendNotAvailable, UnknownError
+from galaxy.api.errors import (
+    AccessDenied, AuthenticationRequired,
+    BackendTimeout, BackendNotAvailable, BackendError, NetworkError, UnknownError
+)
 
 from consts import FIREFOX_AGENT
-
 
 class AccessTokenExpired(Exception):
     pass
@@ -49,8 +52,10 @@ class BackendClient(object):
             }
             try:
                 response = await loop.run_in_executor(None, functools.partial(self._authentication_client.session.request, **params))
-            except requests.Timeout:
+            except (requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout):
                 raise BackendTimeout()
+            except requests.ConnectionError:
+                raise NetworkError
 
             if not ignore_failure:
                 if response.status_code == HTTPStatus.UNAUTHORIZED:
@@ -70,10 +75,7 @@ class BackendClient(object):
                 return response
 
         except Exception as e:
-            log.exception(
-                f"Request exception: {str(e)}; url: {url}, method: {method}, data: {data}, headers: {headers}"
-            )
-            raise
+            raise e
 
     async def refresh_cookies(self):
         headers = {
@@ -83,7 +85,6 @@ class BackendClient(object):
                                    ignore_failure=True)
 
         # verbose log responses in this function due to large probability of failure
-        log.debug(f"---GET https://{self._authentication_client.region}.account.blizzard.com/games, {r.status_code}, {r.url}, {r.headers}\n\n{r.content}\n--------------------")
 
         headers = {
             'User-Agent': FIREFOX_AGENT,
@@ -91,7 +92,6 @@ class BackendClient(object):
         }
         r = await self.do_request("GET", f"https://{self._authentication_client.region}.account.blizzard.com/api/games-and-subs", json=False,
                                    headers=headers, ignore_failure=True)
-        log.debug(f"---GET https://{self._authentication_client.region}.account.blizzard.com/api/games-and-subs, {r.status_code}, {r.url}, {r.headers}\n\n{r.content}\n--------------------")
 
         if r.status_code != 401:
             return
@@ -102,14 +102,12 @@ class BackendClient(object):
         }
         r = await self.do_request("GET", f"https://{self._authentication_client.region}.account.blizzard.com:443/oauth2/authorization/account-settings",
                                    json=False, headers=headers)
-        log.debug(f"---GET https://{self._authentication_client.region}.account.blizzard.com:443/oauth2/authorization/account-settings, {r.status_code}, {r.url}, {r.headers}\n\n{r.content}\n--------------------")
 
         headers = {
             'User-Agent': FIREFOX_AGENT
         }
         r = await self.do_request("GET", f"https://{self._authentication_client.region}.account.blizzard.com/api/games-and-subs", json=False,
                                    headers=headers)
-        log.debug(f"--GET https://{self._authentication_client.region}.account.blizzard.com/api/games-and-subs, {r.status_code}, {r.url}, {r.headers}\n\n{r.content}\n--------------------")
         return
 
     async def get_user_info(self):

@@ -14,8 +14,7 @@ class ConfigParser(object):
         try:
             raw_games = self.parse(config_data)
             self.games = self.decode(raw_games)
-        except Exception as e:
-            log.exception(repr(e))
+        except Exception:
             log.warning('Failed to read Battle.net config, using default values.')
 
     @property

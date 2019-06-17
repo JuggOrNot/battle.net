@@ -2,7 +2,6 @@ import re
 import os
 import asyncio
 import logging as log
-import shutil
 import subprocess
 import abc
 from time import time
@@ -40,16 +39,6 @@ class WinUninstaller(object):
             f'--displayname={game.info.name}'
         ]
         subprocess.Popen(args, cwd=os.path.dirname(self.path))
-
-
-class MacUninstaller(object):
-    def __init__(self):
-        pass
-
-    def uninstall_game(self, game, uninstall_tag, lang):
-        log.info(f"INSTALL_PATH: {game.install_path}")
-        shutil.rmtree(game.install_path)
-
 
 class _LocalClient(abc.ABC):
     def __init__(self):
@@ -111,6 +100,14 @@ class _LocalClient(abc.ABC):
             "--install",
             f"--game={game.uid}"
         ]
+        subprocess.Popen(args, cwd=os.path.dirname(self._exe))
+
+    def open_battlenet(self, id):
+        if not self.is_installed:
+            raise ClientNotInstalledError()
+        game = Blizzard[id]
+        args = {self._exe,
+                f"--game={game.uid}"}
         subprocess.Popen(args, cwd=os.path.dirname(self._exe))
 
     async def wait_until_game_stops(self, game: InstalledGame):
@@ -247,4 +244,4 @@ if SYSTEM == Platform.WINDOWS:
     Uninstaller = WinUninstaller
 elif SYSTEM == Platform.MACOS:
     LocalClient = MacLocalClient
-    Uninstaller = MacUninstaller
+    Uninstaller = None

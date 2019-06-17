@@ -1,5 +1,4 @@
 from definitions import WebsiteAuthData
-import logging as log
 import pickle
 import asyncio
 
@@ -10,7 +9,6 @@ from functools import partial
 
 from galaxy.api.errors import InvalidCredentials
 from galaxy.api.types import Authentication, NextStep
-from galaxy.api.jsonrpc import Aborted
 
 from consts import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI, FIREFOX_AGENT
 
@@ -22,14 +20,12 @@ def _found_region(cookies):
                 _region = cookie['domain'].split('.')[0]
                 # 4th region - chinese uses different endpoints, not covered by current plugin
                 if _region.lower() in ['eu', 'us', 'kr']:
-                    log.debug(f'battle.net region set to: {_region}')
                     return _region
                 else:
                     raise ValueError(f'Unknown region {_region}')
         else:  # for
             raise ValueError(f'JSESSIONID cookie not found')
-    except Exception as e:
-        log.debug(f'battle.net region set to EU, error: {e}')
+    except Exception:
         return 'eu'
 
 
@@ -48,14 +44,16 @@ class AuthenticatedHttpClient(object):
         return self.session is not None
 
     async def shutdown(self):
-        await self.session.close()
-        self.session = None
+        if self.session:
+            self.session.close()
+            self.session = None
 
     def process_stored_credentials(self, stored_credentials):
         auth_data = WebsiteAuthData(
             cookie_jar=pickle.loads(bytes.fromhex(stored_credentials['cookie_jar'])),
             access_token=stored_credentials['access_token'],
-            region=stored_credentials['region'] if 'region' in stored_credentials else 'eu'
+            region=stored_credentials['region'] if 'region' in stored_credentials else 'eu',
+            ba_tassadar=stored_credentials['BA-tassadar']
         )
         # set default user_details data from cache
         if 'user_details_cache' in stored_credentials:
@@ -76,12 +74,11 @@ class AuthenticatedHttpClient(object):
             "client_secret": CLIENT_SECRET,
             "code": code
         }
-        log.info(f"data {data}")
         response = await loop.run_in_executor(None, partial(s.post, url, data=data))
         response.raise_for_status()
         result = response.json()
         access_token = result["access_token"]
-        self.auth_data = WebsiteAuthData(cookie_jar=cookie_jar, access_token=access_token, region=self.region)
+        self.auth_data = WebsiteAuthData(cookie_jar=cookie_jar, access_token=access_token, region=self.region, ba_tassadar=cookie_jar['BA-tassadar'])
         return self.auth_data
 
     # NOTE: use user data to present usertag/name to Galaxy, if this token expires and plugin cannot refresh it
@@ -90,23 +87,21 @@ class AuthenticatedHttpClient(object):
     def validate_auth_status(self, auth_status):
         if 'error' in auth_status:
             if not self.user_details:
-                raise Aborted()
+                raise InvalidCredentials()
             else:
-                log.debug('validate_access_token failed, using stored user_id')
                 return False
         elif not self.user_details:
-            raise Aborted()
+            raise InvalidCredentials()
         else:
             if not ("authorities" in auth_status and "IS_AUTHENTICATED_FULLY" in auth_status["authorities"]):
-                raise Aborted()
+                raise InvalidCredentials()
             return True
 
     def parse_user_details(self):
-        log.info(f"oauth/userinfo: {self.user_details}")
         if 'id' and 'battletag' in self.user_details:
             return Authentication(self.user_details["id"], self.user_details["battletag"])
         else:
-            raise Aborted()
+            raise InvalidCredentials()
 
     def authenticate_using_login(self):
         _URI = f'https://battle.net/oauth/authorize?response_type=code&client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&scope=wow.profile+sc2.profile'
@@ -124,7 +119,6 @@ class AuthenticatedHttpClient(object):
         try:
             battletag = self.user_details["battletag"]
         except KeyError:
-            log.error("User failed to set battle tag")
             raise InvalidCredentials()
         self._plugin.store_credentials(self.creds)
         return Authentication(self.user_details["id"], battletag)
@@ -136,14 +130,13 @@ class AuthenticatedHttpClient(object):
 
     def set_credentials(self):
         self.creds = {"cookie_jar": pickle.dumps(self.auth_data.cookie_jar).hex(), "access_token": self.auth_data.access_token,
-                      "user_details_cache": self.user_details, "region": self.auth_data.region}
+                      "user_details_cache": self.user_details, "region": self.auth_data.region, "BA-tassadar": self.auth_data.ba_tassadar}
 
     def parse_battletag(self):
         try:
             battletag = self.user_details["battletag"]
         except KeyError:
             _URI = f'https://{self.region}.battle.net/login/en/flow/app.app?step=login&ST={self.auth_data.cookie_jar["BA-tassadar"]}&app=app&cr=true'
-            log.info(_URI)
             auth_params = {
                 "window_title": "Login to Battle.net",
                 "window_width": 540,
@@ -170,7 +163,9 @@ class AuthenticatedHttpClient(object):
     def refresh_credentials(self):
         creds = {
             "cookie_jar": pickle.dumps(self.session.cookie_jar).hex(),
-            "access_token": self.auth_data.access_token
+            "access_token": self.auth_data.access_token,
+            "region": self.auth_data.region,
+            "user_details_cache": self.user_details,
+            "BA-tassadar": self.auth_data.ba_tassadar
         }
-
         self._plugin.store_credentials(creds)
