@@ -171,7 +171,8 @@ class BNetPlugin(Plugin):
         try:
             if self.local_client.is_installed != self.database_parser.battlenet_present:
                 self.local_client.refresh()
-
+            log.info(f"Games found in db {self.database_parser.games}")
+            log.info(f"Games found in config {self.config_parser.games}")
             for db_game in self.database_parser.games:
                 for config_game in self.config_parser.games:
                     if config_game.uninstall_tag != db_game.uninstall_tag:
@@ -182,6 +183,7 @@ class BNetPlugin(Plugin):
                         log.warning(f'[{config_game.uid}] is not known blizzard game. Skipping')
                         continue
                     try:
+                        log.info(f"Adding {blizzard_game.blizzard_id} {blizzard_game.name} to installed games")
                         games[blizzard_game.blizzard_id] = InstalledGame(
                             blizzard_game,
                             config_game.uninstall_tag,
@@ -364,6 +366,8 @@ class BNetPlugin(Plugin):
         try:
             local_games = []
             running_games = ProcessProvider().update_games_processes(self.installed_games.values())
+            log.info(f"Installed games {self.installed_games.items()}")
+            log.info(f"Running games {running_games}")
             for id_, game in self.installed_games.items():
                 if game.playable:
                     state = LocalGameState.Installed
