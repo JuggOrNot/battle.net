@@ -1,7 +1,7 @@
 import psutil
 from typing import Set, Iterable
-
 from game import InstalledGame
+from definitions import ClassicGame
 
 
 class ProcessProvider(object):
@@ -23,9 +23,14 @@ class ProcessProvider(object):
         :returns     list of currently running games blizzard ids
         """
         running_games = set()
-        for proc in psutil.process_iter(attrs=['exe'], ad_value=''):
+        for proc in psutil.process_iter(attrs=['exe', 'name'], ad_value=''):
             for game in games:
                 if proc.info['exe'] in game.execs:
                     game.add_process(proc)
-                    running_games.add(game.info.blizzard_id)
+                    running_games.add(game.info.id)
+                if isinstance(game.info, ClassicGame):
+                    if game.info.exe in proc.info['name']:
+                        game.add_process(proc)
+                        running_games.add(game.info.id)
+
         return running_games

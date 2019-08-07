@@ -54,7 +54,7 @@ def result_owned_games():
             "game_title": "Destiny 2",
             "dlcs": [],
             "license_info": {"license_type": "SinglePurchase"},
-        },
+        }
     ]
 
     return [

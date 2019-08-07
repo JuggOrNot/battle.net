@@ -62,7 +62,7 @@ def test_blizzard_object():
     except:
         pass
 
-    game = BlizzardGame('destiny2', 'Destiny 2', '1146311730', 'DST2')
+    game = BlizzardGame('destiny2', 'Destiny 2', '1146311730', 'DST2', False)
     assert Blizzard['destiny2'] == game
     assert Blizzard['Destiny 2'] == game
     assert Blizzard['1146311730'] == game

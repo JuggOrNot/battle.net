@@ -65,6 +65,13 @@ class WebsiteClientMock(AsyncMock):
     }"""
         )
 
+    async def get_owned_classic_games(self):
+        return json.loads("""
+            {
+            "classicGames": []
+            }
+            """)
+
     async def get_owned_games(self):
         return json.loads(
             """{"gameAccounts":[

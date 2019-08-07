@@ -122,11 +122,15 @@ class BackendClient(object):
         games_url = f"https://{self._authentication_client.region}.account.blizzard.com/api/games-and-subs"
         return await self._authenticated_request("GET", games_url)
 
+    async def get_owned_classic_games(self):
+        games_url = f"https://{self._authentication_client.region}.account.blizzard.com/api/classic-games"
+        return await self._authenticated_request("GET", games_url)
+
     async def validate_access_token(self, access_token):
         # this is inconsistent with the documentation https://develop.battle.net/documentation/api-reference/oauth-api
         token_url = f"https://{self._authentication_client.region}.battle.net/oauth/check_token"
         # return await self.do_request()("POST", token_url, data={"token": access_token})
-        return await self.do_request("POST", token_url, data={"token": access_token}, ignore_failure=True)
+        return await self.do_request("POST", token_url, data={"token": access_token},  ignore_failure=True)
 
     async def get_sc2_player_data(self, account_id):
         url = f"https://{self._authentication_client.region}.api.blizzard.com/sc2/player/{account_id}"

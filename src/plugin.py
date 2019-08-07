@@ -8,6 +8,7 @@ import requests
 import requests.cookies
 import pathlib
 import logging as log
+import subprocess
 
 from version import __version__ as version
 
@@ -19,7 +20,7 @@ from process import ProcessProvider
 from local_client import LocalClient, Uninstaller, ClientNotInstalledError
 from parsers import ConfigParser, DatabaseParser
 from backend import BackendClient, AccessTokenExpired
-from definitions import Blizzard, DataclassJSONEncoder, License_Map
+from definitions import Blizzard, DataclassJSONEncoder, License_Map, ClassicGame
 from game import InstalledGame
 from watcher import FileWatcher
 from consts import CONFIG_PATH, AGENT_PATH, SYSTEM
@@ -74,32 +75,42 @@ class BNetPlugin(Plugin):
         loop.create_task(self._register_local_data_watcher())
 
     async def _register_local_data_watcher(self):
-        any_change_event = asyncio.Event()
-        FileWatcher(self.CONFIG_PATH, any_change_event, interval=1)
-        FileWatcher(self.PRODUCT_DB_PATH, any_change_event, interval=2.5)
+        async def ping(event, interval):
+            while True:
+                await asyncio.sleep(interval)
+                if not self.watched_running_games:
+                    if not event.is_set():
+                        event.set()
+
+        parse_local_data_event = asyncio.Event()
+        FileWatcher(self.CONFIG_PATH, parse_local_data_event, interval=1)
+        FileWatcher(self.PRODUCT_DB_PATH, parse_local_data_event, interval=2.5)
+        asyncio.create_task(ping(parse_local_data_event, 30))
         while True:
-            await any_change_event.wait()
+            await parse_local_data_event.wait()
             refreshed_games = self._parse_local_data()
             if not self.notifications_enabled:
                 self._update_statuses(refreshed_games, self.installed_games)
             self.installed_games = refreshed_games
-            any_change_event.clear()
+            parse_local_data_event.clear()
 
     async def _notify_about_game_stop(self, game, starting_timeout):
-        if game.info.blizzard_id in self.watched_running_games:
-            log.debug(f'Game {game.info.blizzard_id} is already watched. Skipping')
+        id_to_watch = game.info.id
+
+        if id_to_watch in self.watched_running_games:
+            log.debug(f'Game {id_to_watch} is already watched. Skipping')
             return
 
         try:
-            self.watched_running_games.add(game.info.blizzard_id)
+            self.watched_running_games.add(id_to_watch)
             await asyncio.sleep(starting_timeout)
             ProcessProvider().update_games_processes([game])
             log.info(f'Setuping process watcher for {game._processes}')
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, game.wait_until_game_stops)
         finally:
-            self.update_local_game_status(LocalGame(game.info.blizzard_id, LocalGameState.Installed))
-            self.watched_running_games.remove(game.info.blizzard_id)
+            self.update_local_game_status(LocalGame(id_to_watch, LocalGameState.Installed))
+            self.watched_running_games.remove(id_to_watch)
 
     def _update_statuses(self, refreshed_games, previous_games):
         for blizz_id, refr in refreshed_games.items():
@@ -184,7 +195,7 @@ class BNetPlugin(Plugin):
                         continue
                     try:
                         log.info(f"Adding {blizzard_game.blizzard_id} {blizzard_game.name} to installed games")
-                        games[blizzard_game.blizzard_id] = InstalledGame(
+                        games[blizzard_game.id] = InstalledGame(
                             blizzard_game,
                             config_game.uninstall_tag,
                             db_game.version,
@@ -198,6 +209,7 @@ class BNetPlugin(Plugin):
         except Exception as e:
             log.exception(str(e))
         finally:
+            games = {**games, **self.local_client.find_classic_games()}
             return games
 
     def log_out(self):
@@ -215,6 +227,19 @@ class BNetPlugin(Plugin):
     async def install_game(self, game_id):
         if not self.authentication_client.is_authenticated():
             raise AuthenticationRequired()
+
+        installed_game = self.installed_games.get(game_id, None)
+        if installed_game and os.access(installed_game.install_path, os.F_OK):
+            log.warning("Received install command on an already installed game")
+            return await self.launch_game(game_id)
+
+        if game_id in Blizzard.legacy_game_ids:
+            if SYSTEM == pf.WINDOWS:
+                platform = 'windows'
+            elif SYSTEM == pf.MACOS:
+                platform = 'macos'
+            webbrowser.open(f"https://www.blizzard.com/download/confirmation?platform={platform}&locale=enUS&version=LIVE&id={game_id}")
+            return
         try:
             self.local_client.refresh()
             log.info(f'Installing game of id {game_id}')
@@ -235,14 +260,17 @@ class BNetPlugin(Plugin):
             except Exception as e:
                 log.exception(f"Opening battlenet client failed {e}")
         else:
-            if self.uninstaller is None:
-                raise FileNotFoundError('Uninstaller not found')
             try:
                 installed_game = self.installed_games.get(game_id, None)
+
                 if installed_game is None or not os.access(installed_game.install_path, os.F_OK):
                     log.error(f'Cannot uninstall {Blizzard[game_id].uid}')
                     self.update_local_game_status(LocalGame(game_id, LocalGameState.None_))
                     return
+
+                if not isinstance(installed_game.info, ClassicGame):
+                    if self.uninstaller is None:
+                        raise FileNotFoundError('Uninstaller not found')
 
                 uninstall_tag = installed_game.uninstall_tag
                 client_lang = self.config_parser.locale_language
@@ -257,11 +285,25 @@ class BNetPlugin(Plugin):
 
         try:
             if self.installed_games is None:
-                raise ClientNotInstalledError(message="B.net client is not called or get_local_games not called")
+                log.error(f'Launching game that is not installed: {game_id}')
+                return await self.install_game(game_id)
 
             game = self.installed_games.get(game_id, None)
             if game is None:
                 log.error(f'Launching game that is not installed: {game_id}')
+                return await self.install_game(game_id)
+
+            if isinstance(game.info, ClassicGame):
+                log.info(f'Launching game of id: {game_id}, {game} at path {os.path.join(game.install_path, game.info.exe)}')
+                if SYSTEM == pf.WINDOWS:
+                    subprocess.Popen(os.path.join(game.install_path, game.info.exe))
+                elif SYSTEM == pf.MACOS:
+                    if not game.info.bundle_id:
+                        log.warning(f"{game.name} has no bundle id, help by providing us bundle id of this game")
+                    subprocess.Popen(['open', '-b', game.info.bundle_id])
+                
+                self.update_local_game_status(LocalGame(game_id, LocalGameState.Installed | LocalGameState.Running))
+                asyncio.create_task(self._notify_about_game_stop(game, 6))
                 return
 
             self.local_client.refresh()
@@ -336,15 +378,43 @@ class BNetPlugin(Plugin):
         friends_list = await self.social_features.get_friends()
         return [FriendInfo(user_id=friend.id.low, user_name='') for friend in friends_list]
 
-
     async def get_owned_games(self):
         if not self.authentication_client.is_authenticated():
             raise AuthenticationRequired()
 
+        def _parse_classic_games(classic_games):
+            for classic_game in classic_games["classicGames"]:
+                log.info(f"looking for {classic_game} in classic games")
+                try:
+                    blizzard_game = Blizzard[classic_game["localizedGameName"].replace(u'\xa0', ' ')]
+                    log.info(f"match! {blizzard_game}")
+                    classic_game["titleId"] = blizzard_game.uid
+                    classic_game["gameAccountStatus"] = "Good"
+                except KeyError:
+                    continue
+
+            return classic_games
+
+        def _get_not_added_free_games(owned_games):
+            owned_games_ids = []
+            for game in owned_games:
+                if "titleId" in game:
+                    owned_games_ids.append(str(game["titleId"]))
+
+            return [{"titleId": game.blizzard_id,
+                    "localizedGameName": game.name,
+                    "gameAccountStatus": "Free"}
+                    for game in Blizzard.free_games if game.blizzard_id not in owned_games_ids]
+
         try:
-            if not self.owned_games_cache:
-                games = await self.backend_client.get_owned_games()
-                self.owned_games_cache = games["gameAccounts"]
+            games = await self.backend_client.get_owned_games()
+            classic_games = _parse_classic_games(await self.backend_client.get_owned_classic_games())
+            owned_games = games["gameAccounts"] + classic_games["classicGames"]
+            log.info(f"Owned games {owned_games}")
+            free_games_to_add = _get_not_added_free_games(owned_games)
+            owned_games += free_games_to_add
+            log.info(f"Owned games {owned_games} with free games")
+            self.owned_games_cache = owned_games
             return [
                 Game(
                     str(game["titleId"]),
@@ -352,7 +422,7 @@ class BNetPlugin(Plugin):
                     [],
                     LicenseInfo(License_Map[game["gameAccountStatus"]]),
                 )
-                for game in self.owned_games_cache
+                for game in self.owned_games_cache if "titleId" in game
             ]
         except Exception as e:
             log.exception(f"failed to get owned games: {str(e)}")

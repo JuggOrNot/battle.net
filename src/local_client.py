@@ -8,10 +8,10 @@ from time import time
 
 import psutil
 
-from definitions import Blizzard
+from definitions import Blizzard, ClassicGame
 from process import ProcessProvider
 from game import InstalledGame
-from consts import Platform, SYSTEM
+from consts import Platform, SYSTEM, WINDOWS_UNINSTALL_LOCATION, LS_REGISTER
 
 if SYSTEM == Platform.WINDOWS:
     import winreg
@@ -32,6 +32,10 @@ class WinUninstaller(object):
             raise FileNotFoundError("Uninstaller not found")
 
     def uninstall_game(self, game, uninstall_tag, lang):
+        if isinstance(game.info, ClassicGame):
+            log.info(f"Uninstalling classic game by {uninstall_tag}")
+            subprocess.Popen(uninstall_tag, shell=True)
+            return
         args = [
             str(self.path),
             f'--lang={lang}',
@@ -202,6 +206,36 @@ class WinLocalClient(_LocalClient):
         except FileNotFoundError:
             return None
 
+    def find_classic_games(self):
+            classic_games = {}
+            try:
+                reg = winreg.ConnectRegistry(None, winreg.HKEY_LOCAL_MACHINE)
+                with winreg.OpenKey(reg, WINDOWS_UNINSTALL_LOCATION) as key:
+                    for game in Blizzard.legacy_games:
+                        log.debug(f"Checking if {game} is in registry ")
+                        if game.registry_path:
+                            try:
+                                with winreg.OpenKey(key, game.registry_path) as game_key:
+                                    log.debug(f"Found classic game registry entry! {game.registry_path}")
+                                    install_path = winreg.QueryValueEx(game_key, game.registry_installation_key)[0]
+                                    uninstall_path = winreg.QueryValueEx(game_key, "UninstallString")[0]
+                                    if os.path.exists(install_path):
+                                        log.debug(f"Found classic game is installed! {game.registry_path}")
+                                        classic_games[game.id] = InstalledGame(
+                                            game,
+                                            uninstall_path,
+                                            '1.0',
+                                            '',
+                                            install_path
+                                        )
+                            except OSError:
+                                # Game is not installed
+                                continue
+            except OSError as e:
+                log.exception(f"Exception while looking for installed classic games {e}")
+            finally:
+                return classic_games
+
 
 class MacLocalClient(_LocalClient):
     _PATH = "/Applications/Battle.net.app/Contents/MacOS/Battle.net"
@@ -237,6 +271,23 @@ class MacLocalClient(_LocalClient):
             if proc.info['exe'] in game.execs:
                 return True
         return False
+
+    def find_classic_games(self):
+        classic_games = {}
+
+
+        proc = subprocess.run([LS_REGISTER,"-dump"], encoding='utf-8',stdout=subprocess.PIPE)
+        for game in Blizzard.legacy_games:
+            if game.bundle_id:
+                if game.bundle_id in proc.stdout:
+                    classic_games[game.id] = InstalledGame(
+                                                game,
+                                                '',
+                                                '1.0',
+                                                '',
+                                                ''
+                                            )
+        return classic_games
 
 
 if SYSTEM == Platform.WINDOWS:

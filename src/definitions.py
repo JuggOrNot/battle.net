@@ -9,7 +9,8 @@ License_Map = {
     "Trial": LicenseType.SinglePurchase,
     "Good": LicenseType.SinglePurchase,
     "Inactive": LicenseType.SinglePurchase,
-    "Banned": LicenseType.SinglePurchase
+    "Banned": LicenseType.SinglePurchase,
+    "Free": LicenseType.FreeToPlay
 }
 
 class DataclassJSONEncoder(json.JSONEncoder):
@@ -26,13 +27,34 @@ class WebsiteAuthData(object):
     region: str
 
 
+
 @dc.dataclass
 class BlizzardGame(object):
     uid: str
     name: str
     blizzard_id: str
     family: str
+    free_to_play: bool
 
+    @property
+    def id(self):
+        return self.blizzard_id
+
+
+@dc.dataclass
+class ClassicGame(object):
+    uid: str
+    name: str
+    family: str
+    free_to_play: bool
+    registry_path: str = None
+    registry_installation_key: str = None
+    exe: str = None
+    bundle_id: str = None
+
+    @property
+    def id(self):
+        return self.uid
 
 @dc.dataclass
 class ConfigGameInfo(object):
@@ -60,33 +82,50 @@ class Singleton(type):
 
 class _Blizzard(object, metaclass=Singleton):
     _GAMES = [
-        BlizzardGame('s1', 'StarCraft', '21297', 'S1'),
-        BlizzardGame('s2', 'StarCraft II', '21298', 'S2'),
-        BlizzardGame('wow', 'World of Warcraft', '5730135', 'WoW'),
-        BlizzardGame('prometheus', 'Overwatch', '5272175', 'Pro'),
-        BlizzardGame('w3', 'Warcraft III', '?', 'W3'),
-        BlizzardGame('destiny2', 'Destiny 2', '1146311730', 'DST2'),
-        BlizzardGame('hs_beta', 'Hearthstone', '1465140039', 'WTCG'),
-        BlizzardGame('heroes', 'Heroes of the Storm', '1214607983', 'Hero'),
-        BlizzardGame('d3cn', '暗黑破壞神III', '?', 'D3CN'),
-        BlizzardGame('diablo3', 'Diablo III', '17459', 'D3'),
-        BlizzardGame('viper', 'Call of Duty: Black Ops 4', '1447645266', 'VIPR'),
+        BlizzardGame('s1', 'StarCraft', '21297', 'S1', True),
+        BlizzardGame('s2', 'StarCraft II', '21298', 'S2', True),
+        BlizzardGame('wow', 'World of Warcraft', '5730135', 'WoW', True),
+        BlizzardGame('prometheus', 'Overwatch', '5272175', 'Pro', False),
+        BlizzardGame('w3', 'Warcraft III', '?', 'W3', False),
+        BlizzardGame('destiny2', 'Destiny 2', '1146311730', 'DST2', False),
+        BlizzardGame('hs_beta', 'Hearthstone', '1465140039', 'WTCG', True),
+        BlizzardGame('heroes', 'Heroes of the Storm', '1214607983', 'Hero', True),
+        BlizzardGame('d3cn', '暗黑破壞神III', '?', 'D3CN', False),
+        BlizzardGame('diablo3', 'Diablo III', '17459', 'D3', True),
+        BlizzardGame('viper', 'Call of Duty: Black Ops 4', '1447645266', 'VIPR', False),
+        ClassicGame('d2', 'Diablo® II', 'Diablo II', False, 'Diablo II', 'InstallLocation', "Game.exe", "com.blizzard.diabloii"),
+        ClassicGame('d2LOD', 'Diablo® II: Lord of Destruction®', 'Diablo II', False),
+        ClassicGame('w3ROC', 'Warcraft® III: Reign of Chaos',  'Warcraft III', False, 'Warcraft III', 'InstallLocation', 'Warcraft III.exe', 'com.blizzard.WarcraftIII'),
+        ClassicGame('w3tft', 'Warcraft® III: The Frozen Throne®',  'Warcraft III', False, 'Warcraft III', 'InstallLocation', 'Warcraft III.exe', 'com.blizzard.WarcraftIII'),
+        ClassicGame('sca', 'StarCraft® Anthology',  'Starcraft', False, 'StarCraft')
     ]
 
     def __init__(self):
         self.__games = {}
         for game in self._GAMES:
-            self.__games[game.blizzard_id] = game
+            self.__games[game.id] = game
 
     def __getitem__(self, key):
         for game in self._GAMES:
-            if key in [game.blizzard_id, game.uid, game.name]:
+            if key in [game.id, game.uid, game.name]:
                 return game
         raise KeyError()
 
     @property
     def games(self):
         return self.__games
+
+    @property
+    def free_games(self):
+        return [game for game in self._GAMES if game.free_to_play]
+
+    @property
+    def legacy_game_ids(self):
+        return [game.uid for game in self._GAMES if isinstance(game, ClassicGame)]
+
+    @property
+    def legacy_games(self):
+        return [game for game in self._GAMES if isinstance(game, ClassicGame)]
 
 
 Blizzard = _Blizzard()
