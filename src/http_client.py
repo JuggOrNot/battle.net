@@ -162,7 +162,7 @@ class AuthenticatedHttpClient(object):
 
     def refresh_credentials(self):
         creds = {
-            "cookie_jar": pickle.dumps(self.session.cookie_jar).hex(),
+            "cookie_jar": pickle.dumps(self.session.cookies).hex(),
             "access_token": self.auth_data.access_token,
             "region": self.auth_data.region,
             "user_details_cache": self.user_details

@@ -36,6 +36,19 @@ class BackendClient(object):
                 raise AccessDenied()
             return await self.do_request(method, url, data, json, headers, ignore_failure)
 
+    @staticmethod
+    def handle_status_code(status_code):
+        if status_code == HTTPStatus.UNAUTHORIZED:
+            raise AuthenticationRequired()
+        if status_code == HTTPStatus.FORBIDDEN:
+            raise AccessDenied()
+        if status_code == HTTPStatus.SERVICE_UNAVAILABLE:
+            raise BackendNotAvailable()
+        if status_code >= 500:
+            raise BackendError()
+        if status_code >= 400:
+            raise UnknownError()
+
     async def do_request(self, method, url, data=None, json=True, headers=None, ignore_failure=False):
         loop = asyncio.get_event_loop()
         if not headers:
@@ -58,16 +71,7 @@ class BackendClient(object):
                 raise NetworkError
 
             if not ignore_failure:
-                if response.status_code == HTTPStatus.UNAUTHORIZED:
-                    raise AuthenticationRequired()
-                if response.status_code == HTTPStatus.FORBIDDEN:
-                    raise AccessDenied()
-                if response.status_code == HTTPStatus.SERVICE_UNAVAILABLE:
-                    raise BackendNotAvailable()
-                if response.status_code >= 500:
-                    raise BackendError()
-                if response.status_code >= 400:
-                    raise UnknownError()
+                self.handle_status_code(response.status_code)
 
             if json:
                 return response.json()

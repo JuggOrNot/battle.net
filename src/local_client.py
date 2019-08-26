@@ -5,6 +5,9 @@ import logging as log
 import subprocess
 import abc
 from time import time
+from pathlib import Path
+
+from threading import Lock
 
 import psutil
 
@@ -49,6 +52,8 @@ class _LocalClient(abc.ABC):
         self._process_provider = ProcessProvider()
         self._process = None
         self._exe = self._find_exe()
+        self.classics_lock = Lock()
+        self.installed_classics = {}
 
     @abc.abstractproperty
     def is_installed(self):
@@ -106,12 +111,15 @@ class _LocalClient(abc.ABC):
         ]
         subprocess.Popen(args, cwd=os.path.dirname(self._exe))
 
-    def open_battlenet(self, id):
+    def open_battlenet(self, id=None):
         if not self.is_installed:
             raise ClientNotInstalledError()
-        game = Blizzard[id]
-        args = {self._exe,
-                f"--game={game.uid}"}
+        if id:
+            game = Blizzard[id]
+            args = {self._exe,
+                    f"--game={game.uid}"}
+        else:
+            args = {self._exe}
         subprocess.Popen(args, cwd=os.path.dirname(self._exe))
 
     async def wait_until_game_stops(self, game: InstalledGame):
@@ -133,12 +141,18 @@ class _LocalClient(abc.ABC):
             raise ClientNotInstalledError()
         timeout = time() + wait_sec
 
-        await self._prepare_to_launch(game.info.uid, timeout)
 
-        cmd = f'"{self._exe}" --exec="launch {game.info.family}"'
-        subprocess.Popen(cmd, cwd=os.path.dirname(self._exe), shell=True)
+        if game.info.family == 'WoW_wow_classic':
+            if SYSTEM == Platform.WINDOWS:
+                cmd = f"\"{Path(game.install_path)/'World of Warcraft Launcher.exe'}\" --productcode=wow_classic"
+            else:
+                cmd = f"open \"{Path(game.install_path)/'World of Warcraft Launcher.app'}\" --args productcode=wow_classic"
+            subprocess.Popen(cmd, shell=True)
+        else:
+            await self._prepare_to_launch(game.info.uid, timeout)
+            cmd = f'"{self._exe}" --exec="launch {game.info.family}"'
+            subprocess.Popen(cmd, cwd=os.path.dirname(self._exe), shell=True)
         log.info(f"Launch game and start waiting for game process")
-
         while time() < timeout:
             if self._check_for_game_process(game):
                 return
@@ -206,35 +220,47 @@ class WinLocalClient(_LocalClient):
         except FileNotFoundError:
             return None
 
-    def find_classic_games(self):
-            classic_games = {}
+    def _add_classic_game(self, game, key):
+        if game.registry_path:
             try:
-                reg = winreg.ConnectRegistry(None, winreg.HKEY_LOCAL_MACHINE)
-                with winreg.OpenKey(reg, WINDOWS_UNINSTALL_LOCATION) as key:
-                    for game in Blizzard.legacy_games:
-                        log.debug(f"Checking if {game} is in registry ")
-                        if game.registry_path:
-                            try:
-                                with winreg.OpenKey(key, game.registry_path) as game_key:
-                                    log.debug(f"Found classic game registry entry! {game.registry_path}")
-                                    install_path = winreg.QueryValueEx(game_key, game.registry_installation_key)[0]
-                                    uninstall_path = winreg.QueryValueEx(game_key, "UninstallString")[0]
-                                    if os.path.exists(install_path):
-                                        log.debug(f"Found classic game is installed! {game.registry_path}")
-                                        classic_games[game.id] = InstalledGame(
-                                            game,
-                                            uninstall_path,
-                                            '1.0',
-                                            '',
-                                            install_path
-                                        )
-                            except OSError:
-                                # Game is not installed
-                                continue
-            except OSError as e:
-                log.exception(f"Exception while looking for installed classic games {e}")
-            finally:
-                return classic_games
+                with winreg.OpenKey(key, game.registry_path) as game_key:
+                    log.debug(f"Found classic game registry entry! {game.registry_path}")
+                    install_path = winreg.QueryValueEx(game_key, game.registry_installation_key)[0]
+                    if install_path.endswith('.exe'):
+                        install_path = Path(install_path).parent
+                    uninstall_path = winreg.QueryValueEx(game_key, "UninstallString")[0]
+                    if os.path.exists(install_path):
+                        log.debug(f"Found classic game is installed! {game.registry_path}")
+                        return InstalledGame(
+                            game,
+                            uninstall_path,
+                            '1.0',
+                            '',
+                            install_path,
+                            True
+                        )
+            except OSError:
+                return None
+        return None
+
+    def find_classic_games(self):
+        classic_games = {}
+        log.debug("Looking for classic games")
+        try:
+            reg = winreg.ConnectRegistry(None, winreg.HKEY_LOCAL_MACHINE)
+            with winreg.OpenKey(reg, WINDOWS_UNINSTALL_LOCATION) as key:
+                for game in Blizzard.legacy_games:
+                    log.debug(f"Checking if {game} is in registry ")
+                    installed_game = self._add_classic_game(game, key)
+                    if installed_game:
+                        classic_games[game.id] = installed_game
+        except OSError as e:
+            log.exception(f"Exception while looking for installed classic games {e}")
+        finally:
+            log.info(f"Returning classic games {classic_games}")
+            self.classics_lock.acquire()
+            self.installed_classics = classic_games
+            self.classics_lock.release()
 
 
 class MacLocalClient(_LocalClient):
@@ -275,7 +301,6 @@ class MacLocalClient(_LocalClient):
     def find_classic_games(self):
         classic_games = {}
 
-
         proc = subprocess.run([LS_REGISTER,"-dump"], encoding='utf-8',stdout=subprocess.PIPE)
         for game in Blizzard.legacy_games:
             if game.bundle_id:
@@ -285,9 +310,12 @@ class MacLocalClient(_LocalClient):
                                                 '',
                                                 '1.0',
                                                 '',
-                                                ''
+                                                '',
+                                                True
                                             )
-        return classic_games
+        self.classics_lock.acquire()
+        self.installed_classics = classic_games
+        self.classics_lock.release()
 
 
 if SYSTEM == Platform.WINDOWS:
