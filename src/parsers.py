@@ -1,6 +1,7 @@
 import logging as log
 
 from definitions import ProductDbInfo, ConfigGameInfo
+from product_db_pb2 import ProductDb
 
 
 class ConfigParser(object):
@@ -49,9 +50,6 @@ class ConfigParser(object):
 
 class DatabaseParser(object):
     NOT_GAMES = ('bna', 'agent')
-    CLUSTER_SIZE = 128
-    PRODUCT_SEPARATOR = 10
-    CONTINUATION_MARK = 18  # when long-path product is divided into two clusters
 
     def __init__(self, data):
         self.data = data
@@ -70,66 +68,15 @@ class DatabaseParser(object):
 
     def parse(self):
         self.products = {}
-        offset = 1
-        while True:
-            if self.data[offset - 1] == 10:  # 0x0A is a section divider
-                # extra 128b is for branch md5, not used by plugin right now
-                section_size = self.data[offset] + 128 if self.data[offset + 1] == 2 else self.data[offset]
-            else:
-                break  # very long path = 0x12 or sections end = 0x18
-            offset += 2
-            section = self.data[offset:offset + section_size]
-            offset += section_size + 1
-            try:
-                product = self._parse_product(section)
-            except:
-                product = None
-            if product:
-                self.products[product.ngdp] = product
+        database = ProductDb()
+        database.ParseFromString(self.data)
 
-    def _parse_next(self, section, offset, encoding='utf-8'):
-        try:
-            size = int.from_bytes(section[offset:offset + 1], 'big')  # path sized always fit in one byte
-        except ValueError as e:
-            raise RuntimeError('Parsing product.db failed: ' + str(e))
-        end = 1 + offset + size
-        obj = section[1 + offset:end]
-        if encoding:
-            obj = obj.decode(encoding)
-        return obj, end
+        for product_install in database.product_installs:
+            ngdp_code = product_install.product_code
+            uninstall_tag = product_install.uid
+            install_path = product_install.settings.install_path
+            playable = product_install.cached_product_state.base_product_state.playable
+            version = product_install.cached_product_state.base_product_state.current_version_str
 
-    def _skip_unused_sections(self, offset, section):
-        t, offset = self._parse_next(section, offset + 1)  # area_code (eu)
-        if section[offset + 3] != 0:
-            t, offset = self._parse_next(section, offset + 7)  # lang subtitles (enEN)
-            t, offset = self._parse_next(section, offset + 1)  # lang voiceover (enEN)
-            t, offset = self._parse_next(section, offset + 3)  # lang ??? (plPL)
-            while section[offset + 2] != 74:  # loop through unknown_usage languages (enUS)
-                t, offset = self._parse_next(section, offset + 5)  # lang
-        else:
-            # t, offset = self._parse_next(section, offset + 1)  # lang
-            offset += 8
-        t, offset = self._parse_next(section, offset + 7)  # POL
-        t, offset = self._parse_next(section, offset + 1)  # PL
-        t, offset = self._parse_next(section, offset + 1)  # internal_name (i.e _retail_)
-        # if section[offset] is equal 1 move offset for an extra position
-        # remarks: there might be other data in section[offset] so do not add it to offset
-        # ...and do it TWICE!
-        offset += 2
-        if section[offset] == 1:
-            offset += 1
-        offset += 2
-        if section[offset] == 1:
-            offset += 1
+            self.products[ngdp_code] = ProductDbInfo(uninstall_tag, ngdp_code, install_path, version, playable)
 
-        return offset
-
-    def _parse_product(self, section):
-        uninstall_tag, offset = self._parse_next(section, 1)
-        ngdp_code, offset = self._parse_next(section, offset + 1)
-        install_path, offset = self._parse_next(section, offset + 3)
-        try:
-            version, _ = self._parse_next(section, self._skip_unused_sections(offset, section) + 11)
-        except:
-            version = ''
-        return ProductDbInfo(uninstall_tag, ngdp_code, install_path, version)

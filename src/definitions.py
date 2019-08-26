@@ -69,6 +69,7 @@ class ProductDbInfo(object):
     ngdp: str = ''
     install_path: str = ''
     version: str = ''
+    playable: bool = False
 
 
 class Singleton(type):

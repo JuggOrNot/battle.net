@@ -9,12 +9,13 @@ pathfinder = PathFinder(SYSTEM)
 
 
 class InstalledGame(object):
-    def __init__(self, info: BlizzardGame, uninstall_tag: str, version: str, last_played: str, install_path: str):
+    def __init__(self, info: BlizzardGame, uninstall_tag: str, version: str, last_played: str, install_path: str, playable: bool):
         self.info = info
         self.uninstall_tag = uninstall_tag
         self.version = version
         self.last_played = last_played
         self.install_path = install_path
+        self.playable = playable
 
         self.execs = pathfinder.find_executables(self.install_path)
         self._processes = set()
@@ -22,11 +23,6 @@ class InstalledGame(object):
     @property
     def local_game_args(self):
         return (self.info.blizzard_id, self.is_running)
-
-    @property
-    def playable(self):
-        if self.version != '':
-            return True
 
     def add_process(self, process: Process):
         try:

@@ -201,6 +201,7 @@ class BNetPlugin(Plugin):
                             db_game.version,
                             config_game.last_played,
                             db_game.install_path,
+                            db_game.playable
                         )
                     except FileNotFoundError as e:
                         log.warning(str(e) + '. Probably outdated product.db after uninstall. Skipping')
