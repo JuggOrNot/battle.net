@@ -9,6 +9,7 @@ import requests.cookies
 import pathlib
 import logging as log
 import subprocess
+import errno
 
 from threading import Thread
 from threading import Lock
@@ -157,8 +158,23 @@ class BNetPlugin(Plugin):
             product_db = load_product_db(self.PRODUCT_DB_PATH)
             self.database_parser = DatabaseParser(product_db)
         except FileNotFoundError as e:
-            log.warning('product.db not found:' + str(e))
+            log.warning(f"product.db not found: {repr(e)}")
             return False
+        except WindowsError as e:
+            # 5 WindowsError access denied
+            if e.winerror == 5:
+                log.warning(f"product.db not accessible: {repr(e)}")
+                self.config_parser = ConfigParser(None)
+                return False
+            else:
+                raise ()
+        except OSError as e:
+            if e.errno == errno.EACCES:
+                log.warning(f"product.db not accessible: {repr(e)}")
+                self.config_parser = ConfigParser(None)
+                return False
+            else:
+                raise ()
         else:
             if self.local_client.is_installed != self.database_parser.battlenet_present:
                 self.local_client.refresh()
@@ -167,10 +183,24 @@ class BNetPlugin(Plugin):
             config = load_config(self.CONFIG_PATH)
             self.config_parser = ConfigParser(config)
         except FileNotFoundError as e:
-            log.warning('config file not found:' + str(e))
+            log.warning(f"config file not found: {repr(e)}")
             self.config_parser = ConfigParser(None)
             return False
-
+        except WindowsError as e:
+            # 5 WindowsError access denied
+            if e.winerror == 5:
+                log.warning(f"config file not accessible: {repr(e)}")
+                self.config_parser = ConfigParser(None)
+                return False
+            else:
+                raise ()
+        except OSError as e:
+            if e.errno == errno.EACCES:
+                log.warning(f"config file not accessible: {repr(e)}")
+                self.config_parser = ConfigParser(None)
+                return False
+            else:
+                raise ()
         return True
 
     def _get_battlenet_installed_games(self):
@@ -362,7 +392,7 @@ class BNetPlugin(Plugin):
                     if not game.info.bundle_id:
                         log.warning(f"{game.name} has no bundle id, help by providing us bundle id of this game")
                     subprocess.Popen(['open', '-b', game.info.bundle_id])
-                
+
                 self.update_local_game_status(LocalGame(game_id, LocalGameState.Installed | LocalGameState.Running))
                 asyncio.create_task(self._notify_about_game_stop(game, 6))
                 return
@@ -474,10 +504,11 @@ class BNetPlugin(Plugin):
 
             # Add wow classic if retail wow is present in owned games
             for owned_game in owned_games.copy():
-                if owned_game['titleId'] == 5730135:
-                    owned_games.append({'titleId': 'wow_classic',
-                                        'localizedGameName': 'World of Warcraft Classic',
-                                        'gameAccountStatus': owned_game['gameAccountStatus']})
+                if 'titleId' in owned_game:
+                    if owned_game['titleId'] == 5730135:
+                        owned_games.append({'titleId': 'wow_classic',
+                                            'localizedGameName': 'World of Warcraft Classic',
+                                            'gameAccountStatus': owned_game['gameAccountStatus']})
 
             free_games_to_add = _get_not_added_free_games(owned_games)
             owned_games += free_games_to_add
@@ -493,7 +524,7 @@ class BNetPlugin(Plugin):
                 for game in self.owned_games_cache if "titleId" in game
             ]
         except Exception as e:
-            log.exception(f"failed to get owned games: {str(e)}")
+            log.exception(f"failed to get owned games: {repr(e)}")
             raise
 
     async def get_local_games(self):

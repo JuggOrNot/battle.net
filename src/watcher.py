@@ -1,5 +1,6 @@
 import os
 import asyncio
+import errno
 
 import logging as log
 
@@ -18,6 +19,17 @@ class FileWatcher(object):
                 stat = os.stat(self.path)
             except FileNotFoundError:
                 continue
+            except WindowsError as e:
+                # 5 WindowsError access denied
+                if e.winerror == 5:
+                    continue
+                else:
+                    raise ()
+            except OSError as e:
+                if e.errno == errno.EACCES:
+                    continue
+                else:
+                    raise ()
             except Exception as e:
                 log.exception(f'Stating {self.path} has failed: {str(e)}')
                 raise RuntimeError('Stating failed:' + str(e))

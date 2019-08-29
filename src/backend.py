@@ -26,18 +26,22 @@ class BackendClient(object):
     async def _authenticated_request(self, method, url, data=None, json=True, headers=None, ignore_failure=False):
         try:
             return await self.do_request(method, url, data, json, headers, ignore_failure)
-        except:
+        except (AccessDenied, AuthenticationRequired):
+            logging.info('Refreshing credentials')
             try:
                 await self.refresh_cookies()
                 self._authentication_client.refresh_credentials()
-
-            except Exception:
+            except AuthenticationRequired:
                 self._plugin.lost_authentication()
-                raise AccessDenied()
+                raise
+            except Exception as e:
+                logging.log(repr(e))
+                raise
             return await self.do_request(method, url, data, json, headers, ignore_failure)
 
     @staticmethod
     def handle_status_code(status_code):
+        logging.debug(f'Status code: {status_code}')
         if status_code == HTTPStatus.UNAUTHORIZED:
             raise AuthenticationRequired()
         if status_code == HTTPStatus.FORBIDDEN:
